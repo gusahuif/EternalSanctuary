@@ -4,6 +4,8 @@
 #include "GameFramework/PlayerController.h"
 #include "ESPlayerController.generated.h"
 
+class AESPickupBase;
+enum class ESkillSlotID : uint8;
 class UInputAction;
 class UInputMappingContext;
 class AESPlayerBase;
@@ -57,11 +59,45 @@ protected:
 
 	void OnPotionTriggered();
 	void OnDodgeTriggered();
-	void OnSkillTriggered(int32 SkillSlot);
-
+	void OnSkillTriggered(ESkillSlotID SkillSlot);
+	void OnSkillReleased(ESkillSlotID SkillSlot);
 	/** 强制攻击状态追踪 */
 	void OnForceAttackStarted();
 	void OnForceAttackCompleted();
+
+	// ==================== 拾取系统 ====================
+	/** 当前范围内的所有拾取物 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Pickup")
+	TArray<AESPickupBase*> NearbyPickups;
+
+	/** 当前选中的拾取物索引 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Pickup")
+	int32 SelectedPickupIndex = 0;
+
+	/** 拾取列表UI类 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Pickup|UI")
+	TSubclassOf<UUserWidget> PickupListWidgetClass;
+
+	/** 拾取列表UI实例 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Pickup|UI")
+	UUserWidget* PickupListWidget;
+
+	// ==================== 拾取函数 ====================
+	/** 更新附近拾取物列表（由Character或Timer调用） */
+	UFUNCTION(BlueprintCallable, Category = "Pickup")
+	void UpdateNearbyPickups();
+
+	/** 滚轮选择下一个 */
+	UFUNCTION(BlueprintCallable, Category = "Pickup")
+	void SelectNextPickup();
+
+	/** 滚轮选择上一个 */
+	UFUNCTION(BlueprintCallable, Category = "Pickup")
+	void SelectPreviousPickup();
+
+	/** 与选中的拾取物交互 */
+	UFUNCTION(BlueprintCallable, Category = "Pickup")
+	void InteractWithSelected();
 	
 	/** 获取当前受控玩家角色 */
 	AESPlayerBase* GetESPlayerCharacter() const;

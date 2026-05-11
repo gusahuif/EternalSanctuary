@@ -6,6 +6,9 @@
 #include "NavigationSystem.h"
 #include "Character/ESPlayerBase.h"
 #include "GAS/ASC/ESAbilitySystemComponent.h"
+#include "Item/Pickup/ESPickupBase.h"
+#include "Kismet/GameplayStatics.h"
+#include "GAS/GA/ESGameplayAbilityBase.h"
 
 AESPlayerController::AESPlayerController()
 {
@@ -14,7 +17,6 @@ AESPlayerController::AESPlayerController()
 	bEnableMouseOverEvents = false;
 
 	DefaultMouseCursor = EMouseCursor::Default;
-	
 }
 
 void AESPlayerController::BeginPlay()
@@ -23,7 +25,8 @@ void AESPlayerController::BeginPlay()
 
 	if (ULocalPlayer* LocalPlayer = GetLocalPlayer())
 	{
-		if (UEnhancedInputLocalPlayerSubsystem* InputSubsystem = LocalPlayer->GetSubsystem<UEnhancedInputLocalPlayerSubsystem>())
+		if (UEnhancedInputLocalPlayerSubsystem* InputSubsystem = LocalPlayer->GetSubsystem<
+			UEnhancedInputLocalPlayerSubsystem>())
 		{
 			if (DefaultInputMappingContext)
 			{
@@ -45,38 +48,73 @@ void AESPlayerController::SetupInputComponent()
 
 	if (IA_LeftClick)
 	{
-		EnhancedInputComponent->BindAction(IA_LeftClick, ETriggerEvent::Started, this, &AESPlayerController::OnLeftClickStarted);
-		EnhancedInputComponent->BindAction(IA_LeftClick, ETriggerEvent::Triggered, this, &AESPlayerController::OnLeftClickTriggered);
-		EnhancedInputComponent->BindAction(IA_LeftClick, ETriggerEvent::Completed, this, &AESPlayerController::OnLeftClickReleased);
+		EnhancedInputComponent->BindAction(IA_LeftClick, ETriggerEvent::Started, this,
+		                                   &AESPlayerController::OnSkillTriggered, ESkillSlotID::Slot_LeftClick);
+		EnhancedInputComponent->BindAction(IA_LeftClick, ETriggerEvent::Completed, this,
+										   &AESPlayerController::OnSkillReleased, ESkillSlotID::Slot_LeftClick);
+		//EnhancedInputComponent->BindAction(IA_LeftClick, ETriggerEvent::Started, this, &AESPlayerController::OnLeftClickStarted);
+		//EnhancedInputComponent->BindAction(IA_LeftClick, ETriggerEvent::Triggered, this, &AESPlayerController::OnLeftClickTriggered);
+		//EnhancedInputComponent->BindAction(IA_LeftClick, ETriggerEvent::Completed, this, &AESPlayerController::OnLeftClickReleased);
 	}
-	
+
 	// 在已有的 IA_LeftClick 绑定下方添加：
 
 	// 右键绑定
 	if (IA_RightClick)
 	{
-		EnhancedInputComponent->BindAction(IA_RightClick, ETriggerEvent::Started, this, &AESPlayerController::OnRightClickStarted);
-		EnhancedInputComponent->BindAction(IA_RightClick, ETriggerEvent::Triggered, this, &AESPlayerController::OnRightClickTriggered);
-		EnhancedInputComponent->BindAction(IA_RightClick, ETriggerEvent::Completed, this, &AESPlayerController::OnRightClickReleased);
+		EnhancedInputComponent->BindAction(IA_RightClick, ETriggerEvent::Started, this,
+		                                   &AESPlayerController::OnSkillTriggered, ESkillSlotID::Slot_RightClick);
+		EnhancedInputComponent->BindAction(IA_RightClick, ETriggerEvent::Completed, this,
+										   &AESPlayerController::OnSkillReleased, ESkillSlotID::Slot_RightClick);
+		//EnhancedInputComponent->BindAction(IA_RightClick, ETriggerEvent::Started, this, &AESPlayerController::OnRightClickStarted);
+		//EnhancedInputComponent->BindAction(IA_RightClick, ETriggerEvent::Triggered, this, &AESPlayerController::OnRightClickTriggered);
+		//EnhancedInputComponent->BindAction(IA_RightClick, ETriggerEvent::Completed, this, &AESPlayerController::OnRightClickReleased);
 	}
 
 	// 强制攻击 (Shift)
 	if (IA_ForceAttack)
 	{
-		EnhancedInputComponent->BindAction(IA_ForceAttack, ETriggerEvent::Started, this, &AESPlayerController::OnForceAttackStarted);
-		EnhancedInputComponent->BindAction(IA_ForceAttack, ETriggerEvent::Completed, this, &AESPlayerController::OnForceAttackCompleted);
+		//EnhancedInputComponent->BindAction(IA_ForceAttack, ETriggerEvent::Started, this, &AESPlayerController::OnForceAttackStarted);
+		//EnhancedInputComponent->BindAction(IA_ForceAttack, ETriggerEvent::Completed, this, &AESPlayerController::OnForceAttackCompleted);
 	}
 
 	// 药水、闪避、技能
-	if (IA_Potion) EnhancedInputComponent->BindAction(IA_Potion, ETriggerEvent::Started, this, &AESPlayerController::OnPotionTriggered);
-	if (IA_Dodge)  EnhancedInputComponent->BindAction(IA_Dodge, ETriggerEvent::Triggered, this, &AESPlayerController::OnDodgeTriggered);
+	if (IA_Potion)
+		EnhancedInputComponent->BindAction(IA_Potion, ETriggerEvent::Started, this,
+		                                   &AESPlayerController::OnPotionTriggered);
+	if (IA_Dodge)
+		EnhancedInputComponent->BindAction(IA_Dodge, ETriggerEvent::Triggered, this,
+		                                   &AESPlayerController::OnDodgeTriggered);
 
 	// 技能绑定（使用 Lambda 转发槽位号）
-	if (IA_Skill1) EnhancedInputComponent->BindAction(IA_Skill1, ETriggerEvent::Started, this, &AESPlayerController::OnSkillTriggered, 1);
-	if (IA_Skill2) EnhancedInputComponent->BindAction(IA_Skill2, ETriggerEvent::Started, this, &AESPlayerController::OnSkillTriggered, 2);
-	if (IA_Skill3) EnhancedInputComponent->BindAction(IA_Skill3, ETriggerEvent::Started, this, &AESPlayerController::OnSkillTriggered, 3);
-	if (IA_Skill4) EnhancedInputComponent->BindAction(IA_Skill4, ETriggerEvent::Started, this, &AESPlayerController::OnSkillTriggered, 4);
-
+	if (IA_Skill1)
+	{
+		EnhancedInputComponent->BindAction(IA_Skill1, ETriggerEvent::Started, this,
+		                                   &AESPlayerController::OnSkillTriggered, ESkillSlotID::Slot_1);
+		EnhancedInputComponent->BindAction(IA_Skill1, ETriggerEvent::Completed, this,
+		&AESPlayerController::OnSkillReleased, ESkillSlotID::Slot_1);
+	}
+	if (IA_Skill2)
+	{
+		EnhancedInputComponent->BindAction(IA_Skill2, ETriggerEvent::Started, this,
+		                                   &AESPlayerController::OnSkillTriggered, ESkillSlotID::Slot_2);
+		EnhancedInputComponent->BindAction(IA_Skill2, ETriggerEvent::Completed, this,
+		&AESPlayerController::OnSkillReleased, ESkillSlotID::Slot_2);
+	}
+	if (IA_Skill3)
+	{
+		EnhancedInputComponent->BindAction(IA_Skill3, ETriggerEvent::Started, this,
+		                                   &AESPlayerController::OnSkillTriggered, ESkillSlotID::Slot_3);
+		EnhancedInputComponent->BindAction(IA_Skill3, ETriggerEvent::Completed, this,
+		&AESPlayerController::OnSkillReleased, ESkillSlotID::Slot_3);
+	}
+	if (IA_Skill4)
+	{
+		EnhancedInputComponent->BindAction(IA_Skill4, ETriggerEvent::Started, this,
+		                                   &AESPlayerController::OnSkillTriggered, ESkillSlotID::Slot_4);
+		EnhancedInputComponent->BindAction(IA_Skill4, ETriggerEvent::Completed, this,
+		&AESPlayerController::OnSkillReleased, ESkillSlotID::Slot_4);
+	}
 }
 
 void AESPlayerController::PlayerTick(float DeltaTime)
@@ -103,7 +141,7 @@ void AESPlayerController::PlayerTick(float DeltaTime)
 		if (bIsInitialClickOnEnemy)
 		{
 			AActor* CurrentTarget = PlayerCharacter->GetAttackTarget();
-			
+
 			// 如果目标死了或无效，尝试扫描鼠标下是否有新目标（暗黑式自动切换）
 			if (!IsTargetAlive(CurrentTarget))
 			{
@@ -296,6 +334,7 @@ void AESPlayerController::OnLeftClickTriggered(const FInputActionValue& Value)
 		HandleHoldAction();
 	}
 }
+
 void AESPlayerController::OnLeftClickReleased(const FInputActionValue& Value)
 {
 	if (bInHoldMode)
@@ -329,7 +368,7 @@ void AESPlayerController::HandleTapAction()
 	{
 		return;
 	}
-	
+
 	if (bIsForceAttackPressed)
 	{
 		// 如果按住 Shift，无论点哪都视为原地攻击（朝向鼠标点）
@@ -340,9 +379,9 @@ void AESPlayerController::HandleTapAction()
 			// 或者调用一个新的接口：PlayerCharacter->AttackAtLocation(GroundHit.ImpactPoint);
 			PlayerCharacter->AttackAtLocation(GroundHit.ImpactPoint);
 		}
-		return; 
+		return;
 	}
-	
+
 	// 第一步：先尝试检测是否点击到了敌对目标
 	FHitResult TargetHitResult;
 	const bool bHitTarget = GetHitResultUnderCursor(TargetTraceChannel, true, TargetHitResult);
@@ -352,7 +391,7 @@ void AESPlayerController::HandleTapAction()
 		PlayerCharacter->SetAttackTarget(TargetHitResult.GetActor());
 		// 【新增】如果已经在攻击范围内，立即触发攻击
 		const float Dist = FVector::Dist2D(
-			PlayerCharacter->GetActorLocation(), 
+			PlayerCharacter->GetActorLocation(),
 			TargetHitResult.GetActor()->GetActorLocation()
 		);
 		if (Dist <= PlayerCharacter->GetAttackRange())
@@ -441,28 +480,28 @@ bool AESPlayerController::IsEnemyActor(AActor* InActor) const
 	{
 		return false;
 	}
-    
+
 	// 方法 1：简单检查 - 如果 Actor 的 CollisionChannel 是 Enemy 则直接返回 true
 	// 这需要敌人蓝图正确设置了 Collision Response
-    
+
 	// 方法 2：使用 LineTrace 验证（更可靠，推荐）
 	FHitResult HitResult;
 	const FVector Start = GetPawn()->GetActorLocation();
 	const FVector End = InActor->GetActorLocation();
-    
+
 	FCollisionQueryParams QueryParams;
 	QueryParams.AddIgnoredActor(GetPawn());
 	QueryParams.bTraceComplex = false;
-    
+
 	// 使用 Enemy 通道（ECC_GameTraceChannel1 是第一个自定义通道）
 	const bool bHit = GetWorld()->LineTraceSingleByChannel(
 		HitResult,
 		Start,
 		End,
-		ECC_GameTraceChannel1,  // ⚠️ 这就是你创建的 Enemy 通道
+		ECC_GameTraceChannel1, // ⚠️ 这就是你创建的 Enemy 通道
 		QueryParams
 	);
-    
+
 	// 如果 trace  hit 到了这个 Actor，说明它是敌人
 	return bHit && (HitResult.GetActor() == InActor);
 }
@@ -491,7 +530,7 @@ void AESPlayerController::RescanEnemyUnderCursor()
 			return;
 		}
 	}
-	
+
 	// 鼠标下没新敌人的话，清理目标，让玩家停下来
 	PlayerCharacter->ClearAttackTarget();
 }
@@ -501,7 +540,7 @@ void AESPlayerController::OnForceAttackCompleted() { bIsForceAttackPressed = fal
 
 void AESPlayerController::OnPotionTriggered()
 {
-	if (AESPlayerBase* PlayerCharacter = GetESPlayerCharacter()) 
+	if (AESPlayerBase* PlayerCharacter = GetESPlayerCharacter())
 		PlayerCharacter->UsePotion(); // 需要在 Base 中声明
 }
 
@@ -511,28 +550,144 @@ void AESPlayerController::OnDodgeTriggered()
 		PlayerCharacter->ExecuteDodge(); // 需要在 Base 中声明
 }
 
-void AESPlayerController::OnSkillTriggered(int32 SkillSlot)
+void AESPlayerController::OnSkillTriggered(ESkillSlotID SkillSlot)
 {
-	// SkillSlot 传入 1~4
-	// 槽位映射：
-	// 1 -> SlotIndex 2
-	// 2 -> SlotIndex 3
-	// 3 -> SlotIndex 4
-	// 4 -> SlotIndex 5
-	if (SkillSlot < 1 || SkillSlot > 4)
+	AESPlayerBase* PlayerCharacter = GetESPlayerCharacter();
+	if (!PlayerCharacter)
 	{
 		return;
 	}
 
-	const int32 SlotIndex = SkillSlot + 1;
-
-	if (AESPlayerBase* PlayerCharacter = GetESPlayerCharacter())
+	// 1. 获取 ASC 和 SkillTag
+	UESAbilitySystemComponent* ESASC = PlayerCharacter->GetESAbilitySystemComponent();
+	FGameplayTag SkillTag = PlayerCharacter->GetSkillTagBySlotID(SkillSlot);
+	
+	if (!ESASC || !SkillTag.IsValid())
 	{
-		if (UESAbilitySystemComponent* ASC = PlayerCharacter->GetESAbilitySystemComponent())
+		return;
+	}
+
+	// ==========================================
+	// 【核心修改 1】先读取 GA 配置：是否需要朝向鼠标
+	// ==========================================
+	bool bShouldFace = true; // 默认朝向
+	
+	TArray<FGameplayAbilitySpec*> FoundSpecs;
+	ESASC->GetActivatableGameplayAbilitySpecsByAllMatchingTags(
+		FGameplayTagContainer(SkillTag),
+		FoundSpecs
+	);
+
+	if (FoundSpecs.Num() > 0 && FoundSpecs[0]->Ability)
+	{
+		UESGameplayAbilityBase* ESAbility = Cast<UESGameplayAbilityBase>(FoundSpecs[0]->Ability);
+		if (ESAbility)
 		{
-			ASC->TryActivateAbilityBySlotIndex(SlotIndex);
+			bShouldFace = ESAbility->bShouldFaceMouseOnPress;
 		}
 	}
+
+	// ==========================================
+	// 【核心修改 2】先尝试激活技能！
+	// ==========================================
+	bool bActivated = ESASC->TryActivateAbilityByTag(SkillTag);
+
+	if (bActivated)
+	{
+		// ==========================================
+		// 【核心修改 3】只有激活成功了，才执行后续逻辑
+		// ==========================================
+		
+		// 通知 Character
+		PlayerCharacter->OnSkillSlotTrigger(SkillSlot);
+
+		// 如果 GA 配置了不需要朝向，直接返回
+		if (!bShouldFace)
+		{
+			return;
+		}
+
+		// ==========================================
+		// 下面是原有的朝向逻辑 (只有激活成功且需要朝向时才执行)
+		// ==========================================
+
+		// 获取鼠标下方的 Actor
+		FHitResult HitResult;
+		const bool bHitSomething = GetHitResultUnderCursor(
+			TargetTraceChannel,
+			false,
+			HitResult
+		);
+
+		AActor* HitActor = bHitSomething ? HitResult.GetActor() : nullptr;
+
+		// 1. 判断鼠标下是否有存活的敌人
+		if (HitActor && IsEnemyActor(HitActor) && IsTargetAlive(HitActor))
+		{
+			// 有敌人：锁定目标并朝向敌人
+			PlayerCharacter->SetAttackTarget(HitActor);
+
+			// 获取敌人位置并计算朝向（仅 YAW）
+			FVector EnemyLocation = HitActor->GetActorLocation();
+			FVector ToEnemy = EnemyLocation - PlayerCharacter->GetActorLocation();
+			ToEnemy.Z = 0.f; // 清除 Z 轴差值，只保留水平面方向
+
+			if (!ToEnemy.IsNearlyZero())
+			{
+				// 计算目标 YAW 角度
+				FRotator TargetRotation = ToEnemy.Rotation();
+				TargetRotation.Pitch = 0.f; // 锁定 Pitch
+				TargetRotation.Roll = 0.f; // 锁定 Roll
+
+				// 设置角色朝向
+				PlayerCharacter->SetActorRotation(TargetRotation);
+			}
+		}
+		else
+		{
+			// 2. 没有敌人：朝向鼠标点击的地面方向
+			FHitResult GroundHitResult;
+			const bool bHitGround = GetHitResultUnderCursorByChannel(
+				GroundTraceChannel,
+				false,
+				GroundHitResult
+			);
+
+			if (bHitGround)
+			{
+				FVector ToMouse = GroundHitResult.ImpactPoint - PlayerCharacter->GetActorLocation();
+				ToMouse.Z = 0.f; // 清除 Z 轴，只旋转 YAW
+
+				if (!ToMouse.IsNearlyZero())
+				{
+					FRotator TargetRotation = ToMouse.Rotation();
+					TargetRotation.Pitch = 0.f;
+					TargetRotation.Roll = 0.f;
+
+					PlayerCharacter->SetActorRotation(TargetRotation);
+				}
+			}
+
+			// 清理攻击目标（因为没有点中敌人）
+			PlayerCharacter->ClearAttackTarget();
+		}
+	}
+	else
+	{
+		// 【修改】激活失败（CD/没蓝），什么都不做，也不转向
+		FString Msg = FString::Printf(TEXT("技能释放失败 (CD/法力不足)"));
+		GEngine->AddOnScreenDebugMessage(-1, 2.f, FColor::Red, Msg);
+	}
+}
+
+void AESPlayerController::OnSkillReleased(ESkillSlotID SkillSlot)
+{
+	AESPlayerBase* PlayerCharacter = GetESPlayerCharacter();
+	if (!PlayerCharacter)
+	{
+		return;
+	}
+	PlayerCharacter->OnSkillSlotComplate(SkillSlot);
 }
 
 
@@ -554,7 +709,12 @@ void AESPlayerController::OnRightClickStarted(const FInputActionValue& Value)
 		}
 	}
 }
-void AESPlayerController::OnRightClickTriggered(const FInputActionValue& Value) { /* 实现右键长按逻辑 */ }
+
+void AESPlayerController::OnRightClickTriggered(const FInputActionValue& Value)
+{
+	/* 实现右键长按逻辑 */
+}
+
 void AESPlayerController::OnRightClickReleased(const FInputActionValue& Value)
 {
 	bRightClickPressed = false;
@@ -562,6 +722,75 @@ void AESPlayerController::OnRightClickReleased(const FInputActionValue& Value)
 	RightClickPressedTime = 0.f;
 }
 
+
+void AESPlayerController::UpdateNearbyPickups()
+{
+	NearbyPickups.Empty();
+
+	if (!GetPawn()) return;
+
+	FVector PlayerLocation = GetPawn()->GetActorLocation();
+
+	// 1. 遍历世界里所有PickupBase
+	TArray<AActor*> AllPickups;
+	UGameplayStatics::GetAllActorsOfClass(GetWorld(), AESPickupBase::StaticClass(), AllPickups);
+
+	for (AActor* Actor : AllPickups)
+	{
+		AESPickupBase* Pickup = Cast<AESPickupBase>(Actor);
+		if (IsValid(Pickup) && Pickup->CanInteract())
+		{
+			// 2. 检查距离
+			float Distance = FVector::Dist(PlayerLocation, Pickup->GetActorLocation());
+			if (Distance <= Pickup->InteractionDistance)
+			{
+				NearbyPickups.Add(Pickup);
+			}
+		}
+	}
+
+	// ✅ 【关键修复】删掉了Lambda排序代码，避免编译错误
+	// 排序不是必须的，如果需要可以后续用简单的冒泡排序代替
+
+	// 3. 修正选中索引
+	if (NearbyPickups.Num() > 0)
+	{
+		SelectedPickupIndex = FMath::Clamp(SelectedPickupIndex, 0, NearbyPickups.Num() - 1);
+	}
+	else
+	{
+		SelectedPickupIndex = 0;
+	}
+
+	// 4. 更新UI（如果你做了UI的话）
+	// if (PickupListWidget) { ... }
+}
+
+void AESPlayerController::SelectNextPickup()
+{
+	if (NearbyPickups.Num() <= 1) return;
+	SelectedPickupIndex = (SelectedPickupIndex + 1) % NearbyPickups.Num();
+	// 更新UI高亮
+}
+
+void AESPlayerController::SelectPreviousPickup()
+{
+	if (NearbyPickups.Num() <= 1) return;
+	SelectedPickupIndex = (SelectedPickupIndex - 1 + NearbyPickups.Num()) % NearbyPickups.Num();
+	// 更新UI高亮
+}
+
+void AESPlayerController::InteractWithSelected()
+{
+	if (NearbyPickups.IsValidIndex(SelectedPickupIndex))
+	{
+		AESPickupBase* Pickup = NearbyPickups[SelectedPickupIndex];
+		if (IsValid(Pickup))
+		{
+			Pickup->OnInteract(GetPawn());
+		}
+	}
+}
 
 AESPlayerBase* AESPlayerController::GetESPlayerCharacter() const
 {

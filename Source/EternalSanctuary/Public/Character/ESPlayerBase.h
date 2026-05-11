@@ -3,10 +3,13 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
 #include "ESCharacterBase.h"
+#include "GameplayTagContainer.h"
+#include "GAS/Data/ESAbilityMetaData.h"
 #include "ESPlayerBase.generated.h"
 
 class USpringArmComponent;
 class UCameraComponent;
+
 /**
  * 命令状态机 - 定义玩家角色当前正在执行的主命令
  */
@@ -19,6 +22,37 @@ enum class ECommandState : uint8
 	Attack UMETA(DisplayName = "Attack"),
 	Cast UMETA(DisplayName = "Cast"),
 	Dead UMETA(DisplayName = "Dead"),
+};
+
+UENUM(BlueprintType)
+enum class ESkillSlotID : uint8
+{
+	Slot_LeftClick  UMETA(DisplayName = "左键"),
+	Slot_RightClick UMETA(DisplayName = "右键"),
+	Slot_1          UMETA(DisplayName = "数字1"),
+	Slot_2          UMETA(DisplayName = "数字2"),
+	Slot_3          UMETA(DisplayName = "数字3"),
+	Slot_4          UMETA(DisplayName = "数字4"),
+	Slot_Passive    UMETA(DisplayName = "被动")
+};
+
+// 技能槽动态绑定数据（玩家拖拽后保存：哪个槽位绑定了哪个技能）
+USTRUCT(BlueprintType)
+struct FES_SkillSlotBinding
+{
+	GENERATED_BODY()
+
+	// 绑定的技能槽ID（比如数字1槽）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SkillSlot")
+	ESkillSlotID SlotID = ESkillSlotID::Slot_LeftClick;
+
+	// 绑定的技能ID（关联FES_SkillMetaData的SkillID，用于查元数据）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SkillSlot")
+	FName BoundSkillID = NAME_None;
+
+	// 快捷缓存：技能Tag（避免每次查DataTable，提升性能）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SkillSlot")
+	FGameplayTag BoundSkillTag = FGameplayTag::EmptyTag;
 };
 
 UCLASS()
@@ -104,6 +138,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ES|StateMachine")
 	void SetInterruptible(bool bNewInterruptible) { bCanBeInterrupted = bNewInterruptible; }
 
+	UFUNCTION(BlueprintCallable, Category = "ES|StateMachine")
 	void StopCurrentAnimation(float BlendOutTime = 0.2f);
 	
 	// -------------------------------------------------------
@@ -152,6 +187,73 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ES|Skill")
 	void EndCast();
 
+	// --------------------------
+	// 技能槽绑定相关
+	// --------------------------
+	// 技能槽绑定表（核心：槽位ID → 绑定的技能数据）
+	UPROPERTY(BlueprintReadWrite, Category = "SkillSystem")
+	TMap<ESkillSlotID, FES_SkillSlotBinding> SkillSlotBindings;
+
+	// 技能元数据表（全局缓存：SkillID → 元数据，启动时读取DataTable初始化）
+	UPROPERTY(BlueprintReadOnly, Category = "SkillSystem")
+	TMap<FName, FES_SkillMetaData> SkillMetaDataMap;
+
+	// 当前装备的被动技能ID（有且只能带1个）
+	UPROPERTY(BlueprintReadWrite, Category = "SkillSystem")
+	FName EquippedPassiveSkillID = NAME_None;
+
+	// 当前装备的被动技能SpecHandle（用于精确激活和移除）
+	FGameplayAbilitySpecHandle PassiveAbilitySpecHandle;
+
+	// 加载技能元数据表（从蓝图创建的DataTable读取）
+	UFUNCTION(BlueprintCallable, Category = "SkillSystem")
+	void LoadSkillMetaData(UDataTable* SkillDataTable);
+
+	// 绑定技能到指定槽位（供UI拖拽调用）
+	UFUNCTION(BlueprintCallable, Category = "SkillSystem")
+	bool BindSkillToSlot(ESkillSlotID SlotID, FName SkillID);
+
+	// 移除指定位置的技能
+	UFUNCTION(BlueprintCallable, Category = "SkillSystem")
+	bool RemoveSkillToSlot(ESkillSlotID SlotID);
+
+	// 交换指定位置的技能
+	UFUNCTION(BlueprintCallable, Category = "SkillSystem")
+	bool SwapSkillToSlot(ESkillSlotID SourceSlotID, ESkillSlotID TargetSlotID);
+
+	// ── 被动技能接口 ──
+
+	/** 装备被动技能（4选1，自动替换旧的被动） */
+	UFUNCTION(BlueprintCallable, Category = "SkillSystem")
+	bool EquipPassiveSkill(FName SkillID);
+
+	/** 移除当前装备的被动技能 */
+	UFUNCTION(BlueprintCallable, Category = "SkillSystem")
+	bool UnequipPassiveSkill();
+
+	/** 获取当前装备的被动技能ID */
+	UFUNCTION(BlueprintPure, Category = "SkillSystem")
+	FName GetEquippedPassiveSkillID() const;
+
+	// 根据槽位ID获取绑定的技能Tag（激活技能用）
+	UFUNCTION(BlueprintPure, Category = "SkillSystem")
+	FGameplayTag GetSkillTagBySlotID(ESkillSlotID SlotID) const;
+	
+	// 按键按下触发对应槽位技能
+	UFUNCTION()
+	void OnSkillSlotTrigger(ESkillSlotID SlotID);
+
+	// 当按键被抬起的时候触发
+	UFUNCTION()
+	void OnSkillSlotComplate(ESkillSlotID SlotID);
+
+	// ── 被动技能通用计算接口 ──
+	// 投射物/伤害管线调用，自动查询当前装备的被动GA并获取增伤/减伤
+	UFUNCTION(BlueprintPure, Category = "SkillSystem")
+	float CalculatePassiveDamageBonus(float FlightDistanceMeters) const;
+
+	UFUNCTION(BlueprintPure, Category = "SkillSystem")
+	float CalculatePassiveDamageReduction(float AttackerDistanceMeters) const;
 	
 	// -------------------------------------------------------
 	// 死亡接口

@@ -4,22 +4,42 @@
 #include "Character/ESPlayerBase.h"
 #include "Core/ESPlayerController.h"
 #include "GAS/ASC/ESAbilitySystemComponent.h"
+#include "GAS/AS/ESAttributeSet.h"
 #include "Animation/AnimInstance.h"
 #include "GameFramework/Character.h"
 
+static const FString CDTagPrefix = TEXT("Ability.Cooldown");
+
 UESGameplayAbilityBase::UESGameplayAbilityBase()
 {
-    // 默认实例化策略：每次激活都创建新实例（支持同时多技能并行）
     InstancingPolicy = EGameplayAbilityInstancingPolicy::InstancedPerActor;
-    
-   
-    ManaCost = 0.0f;
+    SkillID = NAME_None;
     CurrentPlayingMontage = nullptr;
 }
 
-// ──────────────────────────────────────────────────────────────────
-//  符文系统
-// ──────────────────────────────────────────────────────────────────
+// ==========================================
+// 【核心】DataTable 接口
+// ==========================================
+
+bool UESGameplayAbilityBase::GetSkillMetaData(FES_SkillMetaData& OutMetaData) const
+{
+    if (SkillID == NAME_None)
+    {
+        return false;
+    }
+
+    UESAbilitySystemComponent* ESASC = Cast<UESAbilitySystemComponent>(GetAbilitySystemComponentFromActorInfo());
+    if (!ESASC)
+    {
+        return false;
+    }
+
+    return ESASC->GetSkillMetaData(SkillID, OutMetaData);
+}
+
+// ==========================================
+// 符文系统 (保持原样)
+// ==========================================
 
 bool UESGameplayAbilityBase::IsRuneActive(FGameplayTag RuneTag) const
 {
@@ -28,15 +48,12 @@ bool UESGameplayAbilityBase::IsRuneActive(FGameplayTag RuneTag) const
 
 bool UESGameplayAbilityBase::TryActivateRune(FGameplayTag RuneTag)
 {
-    // 战斗中禁止切换符文
     if (IsInCombat())
     {
-        UE_LOG(LogTemp, Warning,
-            TEXT("[ESAbility] 战斗中无法切换符文：%s"), *RuneTag.ToString());
+        UE_LOG(LogTemp, Warning, TEXT("[ESAbility] 战斗中无法切换符文：%s"), *RuneTag.ToString());
         return false;
     }
 
-    // 检查符文是否属于本技能的可用列表
     bool bFound = false;
     for (const FESRuneData& Rune : AvailableRunes)
     {
@@ -49,8 +66,7 @@ bool UESGameplayAbilityBase::TryActivateRune(FGameplayTag RuneTag)
 
     if (!bFound)
     {
-        UE_LOG(LogTemp, Warning,
-            TEXT("[ESAbility] 符文 %s 不属于此技能"), *RuneTag.ToString());
+        UE_LOG(LogTemp, Warning, TEXT("[ESAbility] 符文 %s 不属于此技能"), *RuneTag.ToString());
         return false;
     }
 
@@ -71,13 +87,13 @@ void UESGameplayAbilityBase::DeactivateRune(FGameplayTag RuneTag)
 
 void UESGameplayAbilityBase::ForceActivateRuneFromEquipment(FGameplayTag RuneTag)
 {
-    // 装备触发的符文不受战斗限制
     if (!ActiveRuneTags.HasTag(RuneTag))
     {
         ActiveRuneTags.AddTag(RuneTag);
         OnRuneChanged(RuneTag, true);
     }
 }
+
 bool UESGameplayAbilityBase::ToggleRune(FGameplayTag RuneTag)
 {
     if (!RuneTag.IsValid()) return false;
@@ -100,7 +116,6 @@ bool UESGameplayAbilityBase::CanToggleRune() const
 
 void UESGameplayAbilityBase::SetRunesFromEquipment(const TArray<FGameplayTag>& RuneTags)
 {
-    // 先清空所有来自装备的符文
     for (const FESRuneData& Rune : AvailableRunes)
     {
         if (ActiveRuneTags.HasTag(Rune.RuneTag))
@@ -110,7 +125,6 @@ void UESGameplayAbilityBase::SetRunesFromEquipment(const TArray<FGameplayTag>& R
         }
     }
     
-    // 再添加新的装备符文
     for (FGameplayTag Tag : RuneTags)
     {
         if (!ActiveRuneTags.HasTag(Tag))
@@ -121,10 +135,9 @@ void UESGameplayAbilityBase::SetRunesFromEquipment(const TArray<FGameplayTag>& R
     }
 }
 
-
-// ──────────────────────────────────────────────────────────────────
-//  GAS 标准覆写
-// ──────────────────────────────────────────────────────────────────
+// ==========================================
+// 【GAS】CanActivate：集成 DataTable 检查
+// ==========================================
 
 bool UESGameplayAbilityBase::CanActivateAbility(
     const FGameplayAbilitySpecHandle Handle,
@@ -133,34 +146,102 @@ bool UESGameplayAbilityBase::CanActivateAbility(
     const FGameplayTagContainer* TargetTags,
     FGameplayTagContainer* OptionalRelevantTags) const
 {
+    // 1. 先跑父类检查
     if (!Super::CanActivateAbility(Handle, ActorInfo, SourceTags, TargetTags, OptionalRelevantTags))
     {
         return false;
     }
 
-    // 检查是否被禁止使用技能
+    // 2. 检查通用禁止 Tag
     if (ActorInfo->AbilitySystemComponent.IsValid())
     {
         const UAbilitySystemComponent* ASC = ActorInfo->AbilitySystemComponent.Get();
-        if (ASC->HasMatchingGameplayTag(
-            FGameplayTag::RequestGameplayTag(FName("ES.Status.Block.Skill"))))
+        if (ASC->HasMatchingGameplayTag(FGameplayTag::RequestGameplayTag(FName("ES.Status.Block.Skill"))))
         {
             return false;
         }
     }
 
+    // 3. 如果没有配置 SkillID，直接通过
+    FES_SkillMetaData Data;
+    if (!GetSkillMetaData(Data))
+    {
+        return true;
+    }
+
+    UESAbilitySystemComponent* ESASC = Cast<UESAbilitySystemComponent>(GetAbilitySystemComponentFromActorInfo());
+    if (!ESASC) return false;
+
+    // 4. 检查解锁
+    if (Data.UnlockTag.IsValid() && !ESASC->HasMatchingGameplayTag(Data.UnlockTag))
+    {
+        return false;
+    }
+
+    // 5. 【绝对核心】检查 CD (无论是蓄力还是非蓄力，CD 中绝对不能激活)
+    if (IsOnCooldown())
+    {
+        return false;
+    }
+
+    // 6. 【关键】如果不是蓄力技能，现在就检查蓝量
+    if (!bIsChargeAbility)
+    {
+        if (!HasEnoughMana())
+        {
+            return false;
+        }
+    }
+
+    // 所有检查通过
     return true;
 }
 
+// ==========================================
+// 【GAS】Activate：集成 CD/Cost
+// ==========================================
 void UESGameplayAbilityBase::ActivateAbility(
     const FGameplayAbilitySpecHandle Handle,
     const FGameplayAbilityActorInfo* ActorInfo,
     const FGameplayAbilityActivationInfo ActivationInfo,
     const FGameplayEventData* TriggerEventData)
 {
-    Super::ActivateAbility(Handle, ActorInfo, ActivationInfo, TriggerEventData);
+    FES_SkillMetaData Data;
+    if (GetSkillMetaData(Data) && bIsChargeAbility)
+    {
+        // 如果是蓄力技能，现在就检查蓝！
+        if (!HasEnoughMana())
+        {
+            // 没蓝！直接结束，不调用 Super，不调用 OnAbilityActivated
+            EndAbility(Handle, ActorInfo, ActivationInfo, true, true);
+            return;
+        }
+    }
+    
+    // 1. Commit (GAS 规范)
+    if (!CommitAbility(Handle, ActorInfo, ActivationInfo))
+    {
+        EndAbility(Handle, ActorInfo, ActivationInfo, true, true);
+        return;
+    }
 
-    // 通知蓝图子类执行具体逻辑
+    // 2. 如果不是蓄力技能，立即扣蓝上 CD
+    //FES_SkillMetaData Data;
+    if (GetSkillMetaData(Data) && !bIsChargeAbility)
+    {
+        // 扣蓝
+        if (!ConsumeMana())
+        {
+            EndAbility(Handle, ActorInfo, ActivationInfo, true, true);
+            return;
+        }
+
+        // 上 CD
+        ApplyCooldownFromDataTable();
+    }
+
+    // 3. 通知蓝图 (蓄力技能在这里开始蓄力)
+    Super::ActivateAbility(Handle, ActorInfo, ActivationInfo, TriggerEventData);
     OnAbilityActivated();
 }
 
@@ -171,14 +252,12 @@ void UESGameplayAbilityBase::EndAbility(
     bool bReplicateEndAbility,
     bool bWasCancelled)
 {
-    // 清理 Montage 委托
     if (CurrentPlayingMontage != nullptr)
     {
         if (ACharacter* Character = Cast<ACharacter>(GetAvatarActorFromActorInfo()))
         {
             if (UAnimInstance* AnimInstance = Character->GetMesh()->GetAnimInstance())
             {
-                // 创建委托变量（不能传临时对象）
                 FOnMontageEnded EmptyDelegate;
                 AnimInstance->Montage_SetEndDelegate(EmptyDelegate, CurrentPlayingMontage.Get());
             }
@@ -190,22 +269,119 @@ void UESGameplayAbilityBase::EndAbility(
     Super::EndAbility(Handle, ActorInfo, ActivationInfo, bReplicateEndAbility, bWasCancelled);
 }
 
-// ──────────────────────────────────────────────────────────────────
-//  分类规则：自动处理 CD / Cost
-// ──────────────────────────────────────────────────────────────────
+// ==========================================
+// 【内部】CD & Cost 实现
+// ==========================================
 
-void UESGameplayAbilityBase::ApplyCategoryRules()
+void UESGameplayAbilityBase::ApplyCooldownFromDataTable()
 {
-    // 注意：CostGameplayEffectClass 和 CooldownGameplayEffectClass 是父类 UGameplayAbility 的属性
-    // 直接在蓝图中配置即可，CommitAbility 会自动应用它们
-    
-    // 尝试提交能力（消耗资源 + 进入 CD）
-    CommitAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo);
+    FES_SkillMetaData Data;
+    if (!GetSkillMetaData(Data)) return;
+
+    UESAbilitySystemComponent* ESASC = Cast<UESAbilitySystemComponent>(GetAbilitySystemComponentFromActorInfo());
+    if (!ESASC) return;
+
+    // 计算最终 CD：BaseCD * (1 - CDR)
+    float CDR = 0.0f;
+    const UESAttributeSet* AS = ESASC->GetSet<UESAttributeSet>();
+    if (AS)
+    {
+        CDR = AS->GetCooldownReduction();
+    }
+
+    float FinalCD = Data.CooldownTime * (1.0f - CDR);
+    FinalCD = FMath::Max(FinalCD, 0.1f);
+
+    // 【修改】让 ASC 去处理
+    ESASC->SetSkillCooldown(SkillID, FinalCD);
 }
 
-// ──────────────────────────────────────────────────────────────────
-//  工具函数
-// ──────────────────────────────────────────────────────────────────
+bool UESGameplayAbilityBase::ConsumeMana()
+{
+    FES_SkillMetaData Data;
+    if (!GetSkillMetaData(Data)) return true; // 没数据默认不耗蓝
+
+    if (Data.ManaCost <= 0.0f) return true;
+
+    UESAbilitySystemComponent* ESASC = Cast<UESAbilitySystemComponent>(GetAbilitySystemComponentFromActorInfo());
+    if (!ESASC) return false;
+
+    UESAttributeSet* AS = const_cast<UESAttributeSet*>(ESASC->GetSet<UESAttributeSet>());
+    if (!AS) return false;
+
+    float CurrentMana = AS->GetMana();
+    if (CurrentMana < Data.ManaCost)
+    {
+        return false;
+    }
+
+    AS->SetMana(CurrentMana - Data.ManaCost);
+    return true;
+}
+
+// ==========================================
+// UI 接口实现
+// ==========================================
+
+float UESGameplayAbilityBase::GetCooldownRemaining() const
+{
+    UESAbilitySystemComponent* ESASC = Cast<UESAbilitySystemComponent>(GetAbilitySystemComponentFromActorInfo());
+    if (!ESASC) return 0.0f;
+
+    return ESASC->GetSkillCooldownRemaining(SkillID);
+}
+
+float UESGameplayAbilityBase::GetCooldownTotal() const
+{
+    FES_SkillMetaData Data;
+    if (GetSkillMetaData(Data))
+    {
+        return Data.CooldownTime;
+    }
+    return 0.0f;
+}
+
+bool UESGameplayAbilityBase::IsOnCooldown() const
+{
+    if (SkillID == NAME_None) return false;
+
+    UESAbilitySystemComponent* ESASC = Cast<UESAbilitySystemComponent>(GetAbilitySystemComponentFromActorInfo());
+    if (!ESASC) return false;
+
+    // 【修改】直接问 ASC
+    return ESASC->IsSkillOnCooldown(SkillID);
+}
+
+bool UESGameplayAbilityBase::HasEnoughMana() const
+{
+    FES_SkillMetaData Data;
+    if (!GetSkillMetaData(Data)) return true;
+    if (Data.ManaCost <= 0.0f) return true;
+
+    const UESAbilitySystemComponent* ESASC = Cast<UESAbilitySystemComponent>(GetAbilitySystemComponentFromActorInfo());
+    if (!ESASC) return false;
+
+    const UESAttributeSet* AS = ESASC->GetSet<UESAttributeSet>();
+    if (!AS) return false;
+
+    return AS->GetMana() >= Data.ManaCost;
+}
+
+bool UESGameplayAbilityBase::IsUnlocked() const
+{
+    FES_SkillMetaData Data;
+    if (!GetSkillMetaData(Data)) return true;
+    if (!Data.UnlockTag.IsValid()) return true;
+
+    const UESAbilitySystemComponent* ESASC = Cast<UESAbilitySystemComponent>(GetAbilitySystemComponentFromActorInfo());
+    if (!ESASC) return false;
+
+    return ESASC->HasMatchingGameplayTag(Data.UnlockTag);
+}
+
+// ==========================================
+// 原有工具函数 (保持原样)
+// ==========================================
 
 AESPlayerBase* UESGameplayAbilityBase::GetESOwnerCharacter() const
 {
@@ -242,12 +418,54 @@ void UESGameplayAbilityBase::RemoveStatusTag(FGameplayTag Tag)
     }
 }
 
+// 蓄力技能确认发射
+bool UESGameplayAbilityBase::ServerConfirmCharge()
+{
+    // 0. 如果技能已经结束了，直接返回失败
+    if (!IsActive())
+    {
+        return false;
+    }
+
+    // 1. 查 DataTable
+    FES_SkillMetaData Data;
+    if (!GetSkillMetaData(Data))
+    {
+        EndAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, true, false);
+        return false;
+    }
+
+    // 2. 【最后一次严格检查】法力够不够？
+    if (!HasEnoughMana())
+    {
+        // 蓝不够，直接结束技能，返回 false
+        EndAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, true, true);
+        return false;
+    }
+
+    // 3. 扣蓝
+    if (!ConsumeMana())
+    {
+        EndAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, true, true);
+        return false;
+    }
+
+    // 4. 上 CD
+    ApplyCooldownFromDataTable();
+
+    // 5. 【重要】返回 true，告诉蓝图可以生成子弹了
+    return true;
+}
+
+void UESGameplayAbilityBase::OnSkillKeyboardRelease_Implementation()
+{
+}
+
 bool UESGameplayAbilityBase::IsInCombat() const
 {
     if (UAbilitySystemComponent* ASC = GetAbilitySystemComponentFromActorInfo())
     {
-        return ASC->HasMatchingGameplayTag(
-            FGameplayTag::RequestGameplayTag(FName("ES.Status.Block.SkillSwitch")));
+        return ASC->HasMatchingGameplayTag(FGameplayTag::RequestGameplayTag(FName("ES.Status.Block.SkillSwitch")));
     }
     return false;
 }
@@ -268,12 +486,11 @@ void UESGameplayAbilityBase::OnAttackSpeedChanged(float NewValue, float OldValue
     if (!Character) return;
     UAnimInstance* AnimInstance = Character->GetMesh()->GetAnimInstance();
     if (!AnimInstance) return;
-    AnimInstance->Montage_SetPlayRate(AnimInstance->GetCurrentActiveMontage(),NewValue);
+    AnimInstance->Montage_SetPlayRate(AnimInstance->GetCurrentActiveMontage(), NewValue);
 }
 
 void UESGameplayAbilityBase::PlayAbilityMontage(UAnimMontage* Montage, float PlayRate)
 {
-    // 如果未指定 Montage，使用默认配置的
     if (!Montage)
     {
         Montage = AbilityMontage;
@@ -299,14 +516,11 @@ void UESGameplayAbilityBase::PlayAbilityMontage(UAnimMontage* Montage, float Pla
         return;
     }
 
-    // 记录当前播放的 Montage
     CurrentPlayingMontage = Montage;
-
-    // 播放 Montage
     AnimInstance->Montage_Play(Montage, PlayRate);
 
     GetESAbilitySystemComponent()->OnAttackSpeedChanged.AddDynamic(this, &UESGameplayAbilityBase::OnAttackSpeedChanged);
-    // 绑定结束委托
+    
     FOnMontageEnded EndDelegate;
     EndDelegate.BindUObject(this, &UESGameplayAbilityBase::OnMontageCompleted);
     AnimInstance->Montage_SetEndDelegate(EndDelegate, Montage);
@@ -314,42 +528,31 @@ void UESGameplayAbilityBase::PlayAbilityMontage(UAnimMontage* Montage, float Pla
 
 void UESGameplayAbilityBase::OnMontageCompleted(UAnimMontage* Montage, bool bInterrupted)
 {
-    // 只响应当前技能自己播放的 Montage
     if (Montage != CurrentPlayingMontage.Get())
     {
         return;
     }
 
-    // 如果技能已不在激活态，说明可能已被其他逻辑提前结束
     if (!IsActive())
     {
         return;
     }
 
-    // 如果被中断，标记为取消
     bool bWasCancelled = bInterrupted;
-
-    // 正常结束或被中断，都调用 EndAbility
     EndAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, true, bWasCancelled);
 }
 
 void UESGameplayAbilityBase::OnMontageCancelled(UAnimMontage* Montage, bool bInterrupted)
 {
-    // 注意：此函数在 UE5.7 中可能不会被调用，因为 Montage_SetCancelDelegate 已移除
-    // 取消逻辑统一在 OnMontageCompleted 中通过 bInterrupted 参数处理
-    
-    // 只响应当前技能自己播放的 Montage
     if (Montage != CurrentPlayingMontage.Get())
     {
         return;
     }
 
-    // 如果技能已不在激活态，说明可能已被其他逻辑提前结束
     if (!IsActive())
     {
         return;
     }
 
-    // 被取消，调用 EndAbility 并标记为已取消
     EndAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, true, true);
 }

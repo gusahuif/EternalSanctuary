@@ -28,6 +28,9 @@ public:
 	virtual bool PreGameplayEffectExecute(struct FGameplayEffectModCallbackData& Data) override;
 	virtual void PostGameplayEffectExecute(const struct FGameplayEffectModCallbackData& Data) override;
 
+	// 属性变化后的回调
+	virtual void PostAttributeChange(const FGameplayAttribute& Attribute, float OldValue, float NewValue) override;
+	
 	// --------------------
 	// Vital 组
 	// --------------------
@@ -86,7 +89,7 @@ public:
 	FGameplayAttributeData AttackSpeed;
 	ATTRIBUTE_ACCESSORS(UESAttributeSet, AttackSpeed)
 
-	// 固定减伤
+	// 防御力
 	UPROPERTY(BlueprintReadOnly, Category = "ES|Combat")
 	FGameplayAttributeData Defense;
 	ATTRIBUTE_ACCESSORS(UESAttributeSet, Defense)
@@ -96,6 +99,11 @@ public:
 	FGameplayAttributeData DamageReduction;
 	ATTRIBUTE_ACCESSORS(UESAttributeSet, DamageReduction)
 
+	// 受到伤害增加倍率，0.3 = +30% 受到伤害
+	UPROPERTY(BlueprintReadOnly, Category = "ES|Combat")
+	FGameplayAttributeData Vulnerable;
+	ATTRIBUTE_ACCESSORS(UESAttributeSet, Vulnerable)
+	
 	// 全局增伤
 	UPROPERTY(BlueprintReadOnly, Category = "ES|Combat")
 	FGameplayAttributeData DamageBonus;

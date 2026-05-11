@@ -13,6 +13,7 @@ class UNiagaraSystem;
 class UProjectileMovementComponent;
 class UPrimitiveComponent;
 class UGameplayEffect;
+class AESCharacterBase;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_FiveParams(
 	FOnProjectileCollisionSignature,
@@ -65,10 +66,27 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ES|Projectile")
 	void SetCollisionNotifyTag(FGameplayTag InCollisionNotifyTag);
 
+	/** 执行延迟销毁的逻辑 */
+	void DelayedDestroy();
+
+	/** 获取投射物已飞行距离（从生成点到当前位置） */
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "ES|Projectile")
+	float GetFlightDistance() const;
+
+	// 删除回调，帮助蓝图销毁东西
+	UFUNCTION(BlueprintNativeEvent, Category = "ES|Projectile")
+	void BlueprintDelayedDestroy();
+
+	/** 定时器回调：真正执行销毁 */
+	void OnDelayedDestroyTimer();
+	
 	/** 在 GA 蓝图中可绑定该事件，以在投射物发生碰撞时接收通知。 */
 	UPROPERTY(BlueprintAssignable, Category = "ES|Projectile")
 	FOnProjectileCollisionSignature OnProjectileCollision;
 
+	/** 穿透数量：0=不穿透(碰到就炸)，1=穿1个(共打2个)，以此类推 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ES|Projectile|Collision", meta = (ExposeOnSpawn = true))
+	int32 PenetrationCount = 0;
 protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ES|Projectile")
 	TObjectPtr<USceneComponent> RootSceneComponent;
@@ -86,10 +104,10 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "ES|Projectile|Effects")
 	TObjectPtr<UNiagaraSystem> HitEffectTemplate;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ES|Projectile|Movement")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ES|Projectile|Movement", meta = (ExposeOnSpawn = true))
 	float InitialSpeed;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ES|Projectile|Movement")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ES|Projectile|Movement", meta = (ExposeOnSpawn = true))
 	float MaxSpeed;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ES|Projectile|Movement")
@@ -122,7 +140,7 @@ protected:
 	TSubclassOf<UGameplayEffect> DamageEffectClass;
 
 	/** 技能类型伤害倍率，通过 SetByCaller 传递给 MMC */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ES|Projectile|Damage", meta = (EditCondition = "DamageEffectClass"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ES|Projectile|Damage", meta = (EditCondition = "DamageEffectClass",ExposeOnSpawn = true))
 	float AbilityTypeBonus = 0.f;
 
 	/** 技能来源 Tag，用于标识伤害来源 */
@@ -133,4 +151,14 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ES|Projectile|Effects")
 	FGameplayTag HitCueTag;
 
+	/** 投射物生成位置，用于计算飞行距离（被动技能用） */
+	UPROPERTY(BlueprintReadOnly, Category = "ES|Projectile")
+	FVector SpawnLocation = FVector::ZeroVector;
+
+	/** 记录已经命中过的角色，防止重复伤害 */
+	UPROPERTY()
+	TArray<TWeakObjectPtr<AESCharacterBase>> AlreadyHitCharacters;
+
+	/** 延迟销毁的定时器句柄 */
+	FTimerHandle DelayedDestroyTimerHandle;
 };

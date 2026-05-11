@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Abilities/GameplayAbility.h"
 #include "GameplayTagContainer.h"
+#include "GAS/Data/ESAbilityMetaData.h"
 #include "ESGameplayAbilityBase.generated.h"
 
 class UESAbilitySystemComponent;
@@ -69,33 +70,48 @@ public:
     UESGameplayAbilityBase();
 
     // ──────────────────────────────────────────────
-    //  【设计配置区】在子类/蓝图中填写
+    //  【唯一配置】只需要填这一个！
+    // ──────────────────────────────────────────────
+
+    /** 技能 ID（通过这个 ID 去 DataTable 查所有数据） */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ES|Ability")
+    FName SkillID;
+
+    // ──────────────────────────────────────────────
+    //  【旧配置区】保留兼容，推荐移到 DataTable
     // ──────────────────────────────────────────────
 
     // 技能显示名
-    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ES|Ability")
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ES|Ability|Legacy")
     FText AbilityName;
 
     // 技能描述
-    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ES|Ability")
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ES|Ability|Legacy")
     FText AbilityDescription;
 
     // 技能图标
-    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ES|Ability")
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ES|Ability|Legacy")
     TObjectPtr<UTexture2D> AbilityIcon;
 
     // 技能输入 Tag（对应 ES.Input.LMB / RMB / Skill1...）
-    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ES|Ability")
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ES|Ability|Legacy")
     FGameplayTag InputTag;
 
     // 技能动画 Montage
-    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ES|Ability")
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ES|Ability|Legacy")
     TObjectPtr<UAnimMontage> AbilityMontage;
 
-    // 蓝耗值（如果不用 GE，可直接用这个值）
+    // 按下按键时是否自动朝向鼠标？
+    // (例如：陷阱技能不需要朝向，火球术需要朝向)
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ES|Ability")
-    float ManaCost = 0.0f;
-
+    bool bShouldFaceMouseOnPress = true;
+    
+    // 是否为蓄力技能？
+    // 如果是：按下时只调用 OnAbilityActivated (蓄力)，不扣蓝不上 CD
+    // 直到蓝图调用 ServerConfirmCharge() 时才扣蓝上 CD
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "ES|Ability")
+    bool bIsChargeAbility = false;
+    
     // ──────────────────────────────────────────────
     //  【符文系统】
     // ──────────────────────────────────────────────
@@ -147,6 +163,34 @@ public:
     /** 外部系统（如装备）批量设置符文 */
     UFUNCTION(BlueprintCallable, Category = "ES|Rune")
     void SetRunesFromEquipment(const TArray<FGameplayTag>& RuneTags);
+
+    // ==========================================
+    // 【新增】DataTable & UI 接口
+    // ==========================================
+
+    /** 获取此技能的元数据（从 DataTable 读取） */
+    UFUNCTION(BlueprintCallable, BlueprintPure, Category = "ES|Ability|Data")
+    bool GetSkillMetaData(FES_SkillMetaData& OutMetaData) const;
+
+    /** 获取剩余冷却时间（自动应用 CDR） */
+    UFUNCTION(BlueprintCallable, BlueprintPure, Category = "ES|Ability|UI")
+    float GetCooldownRemaining() const;
+
+    /** 获取总冷却时间（从 DataTable 读） */
+    UFUNCTION(BlueprintCallable, BlueprintPure, Category = "ES|Ability|UI")
+    float GetCooldownTotal() const;
+
+    /** 是否在冷却中 */
+    UFUNCTION(BlueprintCallable, BlueprintPure, Category = "ES|Ability|UI")
+    bool IsOnCooldown() const;
+
+    /** 法力是否足够 */
+    UFUNCTION(BlueprintCallable, BlueprintPure, Category = "ES|Ability|UI")
+    bool HasEnoughMana() const;
+
+    /** 是否已解锁 */
+    UFUNCTION(BlueprintCallable, BlueprintPure, Category = "ES|Ability|UI")
+    bool IsUnlocked() const;
 
     // ──────────────────────────────────────────────
     //  【GAS 标准覆写】
@@ -214,6 +258,18 @@ public:
 
     UFUNCTION(BlueprintCallable, Category = "ES|Ability")
     void RemoveStatusTag(FGameplayTag Tag);
+    
+    /** 蓄力完成，确认发射（此时才扣蓝上 CD） */
+    UFUNCTION(BlueprintCallable, Category = "ES|Ability|Charge")
+    bool ServerConfirmCharge();
+    
+    /**
+     * 当所有怪物都被消灭且达到刷新上限时调用（游戏胜利）
+     * 蓝图中可以 Override 此事件
+     */
+    UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "SpawnPoint")
+    void OnSkillKeyboardRelease();
+
 
     // 是否处于战斗状态（用于阻止技能/符文切换）
     UFUNCTION(BlueprintCallable, BlueprintPure, Category = "ES|Ability")
@@ -229,6 +285,14 @@ public:
 
     UFUNCTION()
     void OnAttackSpeedChanged(float NewValue, float OldValue);
+
+    // ── 被动技能通用接口 ──
+    // 被动GA覆写这两个方法，返回基于上下文的增伤/减伤值
+    // FlightDistanceMeters: 投射物飞行距离（米）
+    // AttackerDistanceMeters: 与攻击者的距离（米）
+    virtual float GetPassiveDamageBonus(float FlightDistanceMeters) const { return 0.f; }
+    virtual float GetPassiveDamageReduction(float AttackerDistanceMeters) const { return 0.f; }
+
 protected:
 
     // 根据 AbilityCategory 自动应用 Cost/Cooldown GE
@@ -246,4 +310,11 @@ protected:
     
     // 当前正在播放的 Montage
     TObjectPtr<UAnimMontage> CurrentPlayingMontage;
+
+private:
+    // 内部：应用冷却
+    void ApplyCooldownFromDataTable();
+
+    // 内部：消耗法力
+    bool ConsumeMana();
 };

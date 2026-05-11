@@ -6,6 +6,8 @@
 #include "AbilitySystemComponent.h"
 #include "GameplayEffectExtension.h"
 #include "GameplayTagContainer.h"
+#include "Character/ESCharacterBase.h"
+#include "Character/ESPlayerBase.h"
 #include "GameFramework/Actor.h"
 
 UESAttributeSet::UESAttributeSet()
@@ -76,8 +78,38 @@ bool UESAttributeSet::PreGameplayEffectExecute(FGameplayEffectModCallbackData& D
 				SetIncomingDamage(0.0f);
 				return false;
 			}
+
+			// ── 被动技能减伤（通用接口，不感知具体被动）──
+				AActor* TargetAvatar = Data.Target.AbilityActorInfo.IsValid()
+					? Data.Target.AbilityActorInfo->AvatarActor.Get()
+					: nullptr;
+				AESPlayerBase* TargetPlayer = Cast<AESPlayerBase>(TargetAvatar);
+				if (TargetPlayer)
+				{
+					AActor* InstigatorActor = Data.EffectSpec.GetContext().GetOriginalInstigator();
+					if (!InstigatorActor)
+					{
+						InstigatorActor = Data.EffectSpec.GetContext().GetInstigator();
+					}
+					if (InstigatorActor)
+					{
+						const float DistanceCm = FVector::Dist(TargetAvatar->GetActorLocation(), InstigatorActor->GetActorLocation());
+						const float DistanceMeters = DistanceCm / 100.0f;
+						const float Reduction = TargetPlayer->CalculatePassiveDamageReduction(DistanceMeters);
+						if (Reduction > 0.f)
+						{
+							float CurrentDamage = Data.EvaluatedData.Magnitude;
+							CurrentDamage *= (1.0f - Reduction);
+							Data.EvaluatedData.Magnitude = CurrentDamage;
+							
+							UE_LOG(LogTemp, Warning, 
+								TEXT("[PassiveReduction] 距离=%.1fm, 减伤=%.0f%%, 剩余伤害=%.1f"),
+								DistanceMeters, Reduction * 100.f, CurrentDamage);
+						}
+					}
+				}
+			}
 		}
-	}
 
 	return true;
 }
@@ -109,6 +141,18 @@ void UESAttributeSet::PostGameplayEffectExecute(const FGameplayEffectModCallback
 		const float RawIncomingDamage = GetIncomingDamage();
 		SetIncomingDamage(0.0f);
 
+		// 如果目标已经死亡，直接跳过所有伤害处理
+		if (TargetActor)
+		{
+			AESCharacterBase* TargetChar = Cast<AESCharacterBase>(TargetActor);
+			if (TargetChar && !TargetChar->IsAlive())
+			{
+				UE_LOG(LogTemp, Log, TEXT("目标已死亡，跳过伤害处理"));
+				return;
+			}
+		}
+		// ==========================================================================
+		
 		if (RawIncomingDamage > 0.0f)
 		{
 			const float FinalDamage = RawIncomingDamage;
@@ -158,6 +202,30 @@ void UESAttributeSet::PostGameplayEffectExecute(const FGameplayEffectModCallback
 					}
 				}
 
+				// =============== 直接在这里判断并触发受击 ===============
+				if (TargetActor)
+				{
+					AESCharacterBase* TargetChar = Cast<AESCharacterBase>(TargetActor);
+					if (TargetChar && TargetChar->IsAlive())
+					{
+						// 1. 先判断是不是DOT伤害
+						const FGameplayTag DotDamageTag = FGameplayTag::RequestGameplayTag(FName("Damage.Type.DOT"), false);
+						bool bIsDotDamage = false;
+					
+						FGameplayEffectSpec& Spec = const_cast<FGameplayEffectSpec&>(Data.EffectSpec);
+						FGameplayTagContainer AssetTags;
+						Spec.GetAllAssetTags(AssetTags);
+						bIsDotDamage = AssetTags.HasTag(DotDamageTag);
+
+						// 2. 只有非DOT伤害才触发受击
+						if (!bIsDotDamage)
+						{
+							TargetChar->HandleHitReact(InstigatorActor);
+						}
+					}
+				}
+				// ======================================================================
+
 				// 生命降到0时，派发死亡事件
 				if (OldHealth > 0.0f && GetHealth() <= 0.0f && TargetActor)
 				{
@@ -175,6 +243,33 @@ void UESAttributeSet::PostGameplayEffectExecute(const FGameplayEffectModCallback
 						{
 							SendGameplayEventToTarget(InstigatorActor, OnKillTag, InstigatorActor, TargetActor);
 						}
+					}
+				}
+				// ==========================================
+				// 【修复】显示伤害数字
+				// ==========================================
+				if (TargetActor && FinalDamage > 0.0f)
+				{
+					AESCharacterBase* TargetChar = Cast<AESCharacterBase>(TargetActor);
+					if (TargetChar)
+					{
+						// 1. 尝试获取受击点位置
+						FVector HitLocation = FVector::ZeroVector;
+						if (Data.EffectSpec.GetContext().GetHitResult())
+						{
+							HitLocation = Data.EffectSpec.GetContext().GetHitResult()->ImpactPoint;
+						}
+
+						// 2. 【新增】检查是否暴击（读取MMC加的Tag）
+						bool bWasCrit = false;
+						FGameplayTag CritTag = FGameplayTag::RequestGameplayTag(FName("Damage.WasCrit"));
+						if (CritTag.IsValid())
+						{
+							bWasCrit = Data.EffectSpec.DynamicGrantedTags.HasTag(CritTag);
+						}
+
+						// 3. 调用显示函数
+						TargetChar->ShowDamageNumber(FinalDamage, bWasCrit, HitLocation);
 					}
 				}
 			}
@@ -206,9 +301,26 @@ void UESAttributeSet::PostGameplayEffectExecute(const FGameplayEffectModCallback
 			SetShield(NewShield);
 		}
 	}
-
+	
 	// 4. 对 Health / Mana / Shield 做最终 Clamp
 	ClampVitalAttributes();
+}
+
+void UESAttributeSet::PostAttributeChange(const FGameplayAttribute& Attribute, float OldValue, float NewValue)
+{
+	Super::PostAttributeChange(Attribute, OldValue, NewValue);
+
+	// 【核心逻辑】当最大生命值增加时，同步增加当前生命值
+	if (Attribute == GetMaxHealthAttribute())
+	{
+		const float HealthDelta = NewValue - OldValue;
+		if (HealthDelta > 0.f) // 只有增加时才同步（减少时不同步，避免死亡后回血）
+		{
+			// 直接加上增量，并确保不超过新的最大生命值
+			const float NewHealth = FMath::Clamp(GetHealth() + HealthDelta, 0.f, NewValue);
+			SetHealth(NewHealth);
+		}
+	}
 }
 
 void UESAttributeSet::SendGameplayEventToTarget(
